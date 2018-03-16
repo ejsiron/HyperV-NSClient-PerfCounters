@@ -54,6 +54,7 @@ define command{
 ```
 
 ### Secure command
+Treat this as an example only. You will need to supply your own certificate paths and names.
 ```
 # Retrieves performance information for Hyper-V virtual machines
 # HOSTADDRESS: always attach to the cluster or host that owns the virtual machine
