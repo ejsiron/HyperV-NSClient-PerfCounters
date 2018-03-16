@@ -1,0 +1,183 @@
+#!/usr/bin/env python
+ 
+# check_hypervmperf 1.0
+# Copyright(C) 2018 Eric Siron
+# Uses check_nrpe and NSClient++ to retrieve performance information for a
+# Hyper-V virtual machine.
+#
+# check_hypervmperf is free software: you can
+# redistribute it and/or modify it under the terms of the GNU General Public
+# License as published by the Free Software Foundation, version 2.
+#
+# This program is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+# FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more
+# details.
+#
+# You should have received a copy of the GNU General Public License along with
+# this program; if not, write to the Free Software Foundation, Inc., 51
+# Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ 
+import getopt
+import os
+from subprocess import Popen, PIPE
+import sys
+ 
+def ShowHelp(exit_code=0):
+ print ''
+ print '** check_hypervmperf version ' + CHECK_VERSION + ' **'
+ print ''
+ print 'Arguments'
+ print '---------'
+ print '-h, --help:\tThis help text'
+ print '-H, --host:\tTarget Hyper-V host name or IP'
+ print '-N, --name:\tName of the virtual machine.'
+ print '-c, --counter:\tPerformance counter to check'
+ print '-W, --warn:\tWarn level for counter'
+ print '-C, --critical:\tCritical level for counter'
+ print '-m, --min:\tUse "min" instead of "max" for warning/critical levels\n\t\tIgnored if neither -W or -C are specified'
+ print '-l, --cluster:\tAuto-locate a clustered virtual machine\'s host.\n\t\tUse the CNO or any member name or IP for --HOST'
+ print 'Accepts all check_nrpe options except -V (version) and -l (license)'
+ 
+ if exit_code < 0 or exit_code > 2:
+ exit_code = 2
+ sys.exit(exit_code)
+ 
+def VerifyNRPE():
+ if not PARENT_PATH:
+ print "Could not determine script path"
+ sys.exit(3)
+ 
+ if not os.path.exists(CHECK_NRPE_PATH):
+ print "Could not find check_nrpe (expected at: )" + CHECK_NRPE_PATH
+ sys.exit(3)
+ 
+def ParseOptions():
+ try:
+ opts, args = getopt.getopt(sys.argv[1:], 'hH:N:c:W:R:ml246nud:P:S:L:C:K:A:s:b:f:p:t:', ['help', 'host=', 'name=', 'counter', 'warn', 'critical', 'min', 'cluster'])
+ except getopt.GetoptError:
+ ShowHelp(3)
+ 
+ global TARGET_HOST
+ global TARGET_VM
+ global TARGET_COUNTER
+ global COUNTER_WARN
+ global COUNTER_CRITICAL
+ global MINMAX_PREFIX
+ global USE_CLUSTERHOST
+ global NRPE_OPTIONS
+ 
+ if len(opts) == 0:
+ ShowHelp()
+ sys.exit(0)
+ 
+ for opt, arg in opts:
+ if arg and arg[0] == '-':
+ arg = ''
+ if opt in ('-h', '--help'):
+ ShowHelp()
+ elif opt in ('-H', '--host'):
+ TARGET_HOST = arg
+ elif opt in ('-N', '--name'):
+ TARGET_VM = arg
+ elif opt in ('-c', '--counter'):
+ TARGET_COUNTER = arg
+ elif opt in ('-W', '--warn'):
+ COUNTER_WARN = arg
+ elif opt in ('-R', '--critical'):
+ COUNTER_CRITICAL = arg
+ elif opt in ('-m', '--min'):
+ MINMAX_PREFIX = 'Min'
+ elif opt in ('-l', '--cluster'):
+ USE_CLUSTERHOST = True
+ else:
+ NRPE_OPTIONS += " " + opt + " " + arg
+ 
+ if not TARGET_HOST:
+ print 'No host specified (-H or --host)'
+ sys.exit(3)
+ 
+ if not TARGET_VM:
+ print 'No VM specified (-N, --name)'
+ sys.exit(3)
+ 
+ if not TARGET_COUNTER:
+ print 'No counter specified (-c, --counter)'
+ sys.exit(3)
+ 
+ TARGET_COUNTER = TARGET_COUNTER.replace('\\', '\\\\')
+ 
+def GetNRPERequestLeadin():
+ nrpe_query = CHECK_NRPE_PATH + ' -H ' + TARGET_HOST + ' '
+ if NRPE_OPTIONS:
+ nrpe_query += NRPE_OPTIONS
+ else:
+ nrpe_query += '-t 30 -p 5666'
+ return nrpe_query + ' '
+ 
+def GetClusterHost(nrpe_query):
+ cluster_query = nrpe_query
+ cluster_query += '-c check_wmi -a "namespace=root\MSCluster" "query=SELECT OwnerNode FROM MSCluster_Resource '
+ cluster_query += 'WHERE Type =\'Virtual Machine\' AND Name LIKE \'% ' + TARGET_VM + '\'\"'
+ cluster_check = Popen(cluster_query, shell = True, stdout = PIPE)
+ cluster_response = cluster_check.communicate()
+ if ' ' in cluster_response[0]: # probably an error message
+ print 'Error while querying cluster for ' + TARGET_VM + ': ' + cluster_response[0]
+ sys.exit(3)
+ elif ',' in cluster_response[0]: # multiple responses; shouldn't happen, but...
+ return cluster_response[0].split(',')[0]
+ else:
+ return cluster_response[0].split()[0]
+ 
+def GetVMPerformance(nrpe_query):
+ perf_query = nrpe_query
+ perf_query += '-c CheckCounter -a "Counter=' + TARGET_COUNTER + '" '
+ if COUNTER_WARN:
+ perf_query += MINMAX_PREFIX + 'Warn=' + COUNTER_WARN + ' '
+ if COUNTER_CRITICAL:
+ perf_query += MINMAX_PREFIX + 'Crit=' + COUNTER_CRITICAL + ' '
+ perf_query += 'ShowAll'
+ perf_check = Popen(perf_query, shell = True, stdout = PIPE)
+ perf_response = perf_check.communicate()
+ return perf_check.returncode, perf_response[0]
+ 
+# setup environment
+CHECK_VERSION = '1.0'
+PARENT_PATH = os.path.dirname(os.path.realpath(__file__))
+CHECK_NRPE_PATH = PARENT_PATH + '/check_nrpe'
+ 
+VerifyNRPE()
+ 
+# load options
+TARGET_HOST = ''
+TARGET_VM = ''
+TARGET_COUNTER = ''
+COUNTER_WARN = ''
+COUNTER_CRITICAL = ''
+MINMAX_PREFIX = 'Max'
+USE_CLUSTERHOST = False
+NRPE_OPTIONS = ''
+ 
+ParseOptions()
+ 
+# prepare cluster query and retrieve hostname
+if USE_CLUSTERHOST:
+ TARGET_HOST =  GetClusterHost(GetNRPERequestLeadin())
+ if not TARGET_HOST:
+ print 'Unable to determine cluster host for ' + TARGET_VM
+ sys.exit(3)
+returncode, perfdata = GetVMPerformance(GetNRPERequestLeadin())
+if returncode == 3:
+ if 'No data to return' in perfdata:
+ print 'Counter not found. Is VM off or moved from ' + TARGET_HOST + '?'
+ else:
+ err_start = 0
+ needle = 'Exception processing request: '
+ if needle in perfdata:
+ err_start = len(needle)
+ err_message = perfdata[err_start:]
+ print err_message
+ sys.exit(0) # not good to trigger alarms on performance just because a VM is off
+else:
+ print perfdata.split('\n')[0]
+ sys.exit(returncode)
