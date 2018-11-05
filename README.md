@@ -73,6 +73,7 @@ define command{
 ```
 
 # Sample Templates
+Configuration mismatches will cause perfectly logical output from this script to fail spectacularly. For instance, if you do not properly attach the service or host name to a valid parent, it might attach to something like "generic-host", causing all sorts of duplicate service warnings. Carefully think through and build out the template heirarchy to use for your VM performance counters *before* running this script.
 Connecting a Hyper-V host to its services can be done in multiple perfectly valid ways. Here is a suggestion:
 ```
 ## Virtual Machine object ##
@@ -104,3 +105,4 @@ define service{
 	register 0
 }
 ```
+Instruct the script to use the above host and service names as templates, and you should avoid collisions.
