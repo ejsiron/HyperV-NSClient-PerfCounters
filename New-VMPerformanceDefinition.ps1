@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
 	Creates Nagios monitoring configurations for Hyper-V virtual machines.
 .DESCRIPTION
@@ -48,14 +48,14 @@
 	If specified, does not include any virtual CPU sensors.
 .PARAMETER SkipDynamicMemory
 	If specified, does not include any dynamic memory sensors. Unnecessary for fixed memory virtual machines.
-.PARAMETER SkipIDE
-	If specified, does not include any emulated IDE sensors. Unnecessary for Generation 2 virtual machines. Operates independently of SkipDisk.
 .PARAMETER SkipDisk
 	If specified, does not generate any virtual hard disk sensors. Unnecessary for diskless virtual machines. Operates independently of SkipIDE.
 .PARAMETER SkipNetwork
 	If specified, does not generate any virtual network sensors.
 .PARAMETER IncludeAdvancedCounters
 	If specified, includes several uncommon and advanced counters in each category.
+.PARAMETER IncludeIDE
+	If specified, includes emulated IDE sensors. Generally reads 0. Not useful for Generation 2 virtual machines. Operates independently of SkipDisk.
 .PARAMETER IncludeLiveMigration
 	If specified, includes LiveMigration-related counters. Unnecessary for non-clustered virtual machines.
 .PARAMETER IncludeSavesSnaps
@@ -73,7 +73,7 @@
 .PARAMETER CreateVMHostDefinition
 	If specified, generates a host{} definition for each virtual machine. Ignored if VMAsHost is not also set.
 	The generated host definition will include the following lines unless you specify a VMHostTemplate:
- 
+
 	max_check_attempts    1
 	check_command         null
 	notifications_enabled 0
@@ -97,20 +97,19 @@
 	None
 .NOTES
 	New-VMPerformanceDefinition.ps1
-	Version 1.0, December 27, 2017
+	Version 1.1, November 5, 2018
 	Author: Eric Siron
-	Copyright: 2017 Altaro Software
 .EXAMPLE
 	New-VMPerformanceDefinition.ps1 -ComputerName -Path C:\Source\svhv01.cfg -ServiceTemplate 'hyperv-vm-performance'
- 
+
 	Creates a basic sensor set from all virtual machines on the host named svhv01 using the defined service template.
 .EXAMPLE
 	Get-CimInstance -ComputerName svhv01 -ClassName msvm_computersystem -Namespace root/virtualization/v2 -Filter 'ElementName="dtmanage"' | New-VMPerformanceDefinition.ps1 -Path C:\Source\dtmanage.cfg -ServiceTemplate 'hyperv-vm-performance' -VMAsHost -IncludeAdvancedCounters -IncludeLiveMigration -IncludeSavesSnaps -IncludeSmartPaging -IncludeNUMA -IncludeNetworkDropReasons -IncludeVmWorkerProcess -IncludeVRSS -IncludeRemotingChecks -CreateVMHostDefinition
- 
+
 	Retrieves the CIM definition from a host named "svhv01" for the virtual machine named "dtmanage" and creates a .cfg file with all possible counters.
 #>
 #requires -Version 4
- 
+
 [CmdletBinding()]
 param(
 	[Parameter(Position = 1, ValueFromPipeline = $true)][System.Object[]]$VM,
@@ -128,10 +127,10 @@ param(
 	[Parameter()][Switch]$UpperCaseHostName,
 	[Parameter()][Switch]$SkipCPU,
 	[Parameter()][Switch]$SkipDynamicMemory,
-	[Parameter()][Switch]$SkipIDE,
 	[Parameter()][Switch]$SkipDisk,
 	[Parameter()][Switch]$SkipNetwork,
 	[Parameter()][Switch]$IncludeAdvancedCounters,
+	[Parameter()][Switch]$IncludeIDE,
 	[Parameter()][Switch]$IncludeLiveMigration,
 	[Parameter()][Switch]$IncludeSavesSnaps,
 	[Parameter()][Switch]$IncludeSmartPaging,
@@ -155,17 +154,17 @@ begin
 	$CounterList = New-Object -TypeName System.Collections.ArrayList
 	$VMList = New-Object -TypeName System.Collections.ArrayList
 	$LineEnding = [String]::Empty
- 
+
 	if (-not (Test-Path -Path $Path))
 	{
 		$OutNull = New-Item -Path $Path -ItemType File
-	} 
- 
+	}
+
 	if (-not $Append)
 	{
 		Clear-Content -Path $Path
 	}
- 
+
 	function New-ServiceObject
 	{
 		param(
@@ -183,7 +182,7 @@ begin
 		Add-Member -InputObject $ServiceItem -MemberType NoteProperty -Name 'Clustered' -Value $Clustered
 		$ServiceItem
 	}
- 
+
 	function New-ServiceDefinition
 	{
 		param(
@@ -195,13 +194,13 @@ begin
 			[Parameter()][String]$ServiceContactGroups,
 			[Parameter()][bool]$VMAsHost
 		)
- 
+
 		$ExtraCommands = ''
 		if ($ServiceObject.Clustered)
 		{
 			$ExtraCommands = '-l'
 		}
- 
+
 		$ServiceText = New-Object System.Text.StringBuilder
 		$OutNull = $ServiceText.AppendFormat('define service{{{0}', $LineEnding)
 		$OutNull = $ServiceText.AppendFormat('   use                 {0}{1}', $ServiceTemplate, $LineEnding)
@@ -232,7 +231,7 @@ begin
 		$OutNull = $ServiceText.AppendFormat('}}{0}', $LineEnding)
 		$ServiceText.ToString()
 	}
- 
+
 	function New-HostDefinition
 	{
 		param(
@@ -244,7 +243,7 @@ begin
 			[Parameter()][bool]$UseSkeletonHost,
 			[Parameter()][String]$LineEnding
 		)
- 
+
 		$HostText = New-Object System.Text.StringBuilder
 		$OutNull = $HostText.AppendFormat('define host{{{0}', $LineEnding)
 		$OutNull = $HostText.AppendFormat('   host_name             {0}{1}', $ComputerName, $LineEnding)
@@ -269,23 +268,23 @@ begin
 		}
 		$OutNull = $HostText.AppendFormat('}}{0}', $LineEnding)
 		$HostText.ToString()
-	} 
- 
+	}
+
 	$AdvancedChecks = @(
-		'\\Hyper-V Hypervisor Partition({0}:HvPt)\\Skipped Timer Ticks', #
-		'\\Hyper-V Hypervisor Partition({0}:HvPt)\\Device Interrupt Throttle Events', #
-		'\\Hyper-V Hypervisor Partition({0}:HvPt)\\Device DMA Errors', #
-		'\\Hyper-V Hypervisor Partition({0}:HvPt)\\Device Interrupt Errors', #
-		'\\Hyper-V Hypervisor Partition({0}:HvPt)\\I/O TLB Flush Cost', #
-		'\\Hyper-V Hypervisor Partition({0}:HvPt)\\I/O TLB Flushes/sec', #
-		'\\Hyper-V Hypervisor Partition({0}:HvPt)\\Device Interrupt Mappings', #
-		'\\Hyper-V Hypervisor Partition({0}:HvPt)\\Attached Devices', #
-		'\\Hyper-V Hypervisor Partition({0}:HvPt)\\1G device pages', #
-		'\\Hyper-V Hypervisor Partition({0}:HvPt)\\2M device pages', #
-		'\\Hyper-V Hypervisor Partition({0}:HvPt)\\4K device pages', #
-		'\\Hyper-V Hypervisor Partition({0}:HvPt)\\1G GPA pages', #
-		'\\Hyper-V Hypervisor Partition({0}:HvPt)\\2M GPA pages', #
-		'\\Hyper-V Hypervisor Partition({0}:HvPt)\\4K GPA pages', #
+		'\\Hyper-V Hypervisor Partition({0}:HvPt)\\Skipped Timer Ticks',
+		'\\Hyper-V Hypervisor Partition({0}:HvPt)\\Device Interrupt Throttle Events',
+		'\\Hyper-V Hypervisor Partition({0}:HvPt)\\Device DMA Errors',
+		'\\Hyper-V Hypervisor Partition({0}:HvPt)\\Device Interrupt Errors',
+		'\\Hyper-V Hypervisor Partition({0}:HvPt)\\I/O TLB Flush Cost',
+		'\\Hyper-V Hypervisor Partition({0}:HvPt)\\I/O TLB Flushes/sec',
+		'\\Hyper-V Hypervisor Partition({0}:HvPt)\\Device Interrupt Mappings',
+		'\\Hyper-V Hypervisor Partition({0}:HvPt)\\Attached Devices',
+		'\\Hyper-V Hypervisor Partition({0}:HvPt)\\1G device pages',
+		'\\Hyper-V Hypervisor Partition({0}:HvPt)\\2M device pages',
+		'\\Hyper-V Hypervisor Partition({0}:HvPt)\\4K device pages',
+		'\\Hyper-V Hypervisor Partition({0}:HvPt)\\1G GPA pages',
+		'\\Hyper-V Hypervisor Partition({0}:HvPt)\\2M GPA pages',
+		'\\Hyper-V Hypervisor Partition({0}:HvPt)\\4K GPA pages',
 		'\\Hyper-V Hypervisor Partition({0}:HvPt)\\Recommended Virtual TLB Size',
 		'\\Hyper-V Hypervisor Partition({0}:HvPt)\\Virtual TLB Flush Entires/sec',
 		'\\Hyper-V Hypervisor Partition({0}:HvPt)\\GPA Space Modifications/sec',
@@ -295,18 +294,18 @@ begin
 		'\\Hyper-V Hypervisor Partition({0}:HvPt)\\Virtual TLB Pages'
 		#'\\Hyper-V Hypervisor Partition({0}:HvPt)\\Virtual Processors'
 	)
- 
+
 	$AdvancedChecks2016 = @(
 		'\\Hyper-V Hypervisor Partition(dtmanage:HvPt)\\Nested TLB Trimmed Pages/sec',
 		'\\Hyper-V Hypervisor Partition(dtmanage:HvPt)\\Nested TLB Free List Size',
 		'\\Hyper-V Hypervisor Partition(dtmanage:HvPt)\\Recommended Nested TLB Size',
 		'\\Hyper-V Hypervisor Partition(dtmanage:HvPt)\\Nested TLB Size'
 	)
- 
+
 	$CPUCoreChecks = @(
 		'\\Hyper-V Hypervisor Virtual Processor({0}:Hv VP {1})\\% Guest Run Time'
 	)
- 
+
 	$CPUAdvancedChecks = @(
 		'\\Hyper-V Hypervisor Virtual Processor({0}:Hv VP {1})\\% Remote Run Time',
 		'\\Hyper-V Hypervisor Virtual Processor({0}:Hv VP {1})\\Total Intercepts Cost',
@@ -383,7 +382,7 @@ begin
 		'\\Hyper-V Hypervisor Virtual Processor({0}:Hv VP {1})\\Hypercalls Cost',
 		'\\Hyper-V Hypervisor Virtual Processor({0}:Hv VP {1})\\Hypercalls/sec'
 	)
- 
+
 	$CPUAdvanced2016Checks = @(
 		'\\Hyper-V Hypervisor Virtual Processor({0}:Hv VP {1})\\Total Virtualization Instructions Emulation Cost',
 		'\\Hyper-V Hypervisor Virtual Processor({0}:Hv VP {1})\\Total Virtualization Instructions Emulated/sec',
@@ -457,7 +456,7 @@ begin
 		'\\Hyper-V Hypervisor Virtual Processor({0}:Hv VP {1})\\Extended Hypercall Intercept Messages/sec',
 		'\\Hyper-V Hypervisor Virtual Processor({0}:Hv VP {1})\\Extended Hypercalls/sec'
 	)
- 
+
 	$DiskCoreChecks = @(
 		'\\Hyper-V Virtual Storage Device({0})\\Queue Length',
 		'\\Hyper-V Virtual Storage Device({0})\\Normalized Throughput',
@@ -466,18 +465,18 @@ begin
 		'\\Hyper-V Virtual Storage Device({0})\\Write Bytes/sec',
 		'\\Hyper-V Virtual Storage Device({0})\\Read Bytes/sec'
 	)
- 
+
 	$DiskAdvancedChecks = @(
 		'\\Hyper-V Virtual Storage Device({0})\\Error Count',
 		'\\Hyper-V Virtual Storage Device({0})\\Flush Count',
 		'\\Hyper-V Virtual Storage Device({0})\\Write Count',
 		'\\Hyper-V Virtual Storage Device({0})\\Read Count'
 	)
- 
+
 	$DiskAdvanced2012R2Checks = @(
 		'\\Hyper-V Virtual Storage Device({0})\\Quota Replenishment Rate'
 	)
- 
+
 	$DiskAdvanced2016Checks = @(
 		'\Hyper-V Virtual Storage Device({0})\\Maximum Bandwidth',
 		'\Hyper-V Virtual Storage Device({0})\\Byte Quota Replenishment Rate',
@@ -489,33 +488,33 @@ begin
 		'\Hyper-V Virtual Storage Device({0})\\Throughput',
 		'\Hyper-V Virtual Storage Device({0})\\Lower Queue Length'
 	)
- 
+
 	$DynamicMemoryChecks = @( # same for 2012R2 and 2016, but always works on 2016
 		'\\Hyper-V Dynamic Memory VM({0})\\Maximum Pressure',
 		'\\Hyper-V Dynamic Memory VM({0})\\Minimum Pressure',
 		'\\Hyper-V Dynamic Memory VM({0})\\Average Pressure',
 		'\\Hyper-V Dynamic Memory VM({0})\\Current Pressure'
 	)
- 
+
 	$DynamicMemoryDMOnlyChecks = @(
-		'\\Hyper-V Dynamic Memory VM({0})\\Physical Memory', # -
-		'\\Hyper-V Dynamic Memory VM({0})\\Guest Visible Physical Memory' # -
+		'\\Hyper-V Dynamic Memory VM({0})\\Physical Memory',
+		'\\Hyper-V Dynamic Memory VM({0})\\Guest Visible Physical Memory'
 	)
- 
+
 	$DynamicMemoryChecks2016 = @(
 		'\\Hyper-V Dynamic Memory VM({0})\\Memory Remove Operations',
 		'\\Hyper-V Dynamic Memory VM({0})\\Removed Memory',
 		'\\Hyper-V Dynamic Memory VM({0})\\Memory Add Operations',
 		'\\Hyper-V Dynamic Memory VM({0})\\Added Memory'
 	)
- 
+
 	$IDEChecks = @(
 		'\\Hyper-V Virtual IDE Controller (Emulated)({0}:Ide Controller)\\Write Bytes/sec',
 		'\\Hyper-V Virtual IDE Controller (Emulated)({0}:Ide Controller)\\Read Bytes/sec',
 		'\\Hyper-V Virtual IDE Controller (Emulated)({0}:Ide Controller)\\Written Sectors/sec',
 		'\\Hyper-V Virtual IDE Controller (Emulated)({0}:Ide Controller)\\Read Sectors/sec'
 	)
- 
+
 	$LiveMigrationChecks = @(
 		'\\Hyper-V VM Live Migration({0}:VM Live Migration)\\Receiver: Decompressed Bytes/sec',
 		'\\Hyper-V VM Live Migration({0}:VM Live Migration)\\Receiver: Maximum Threadpool Thread Count',
@@ -538,7 +537,7 @@ begin
 		'\\Hyper-V VM Live Migration({0}:VM Live Migration)\\Transfer Pass: Is blackout',
 		'\\Hyper-V VM Live Migration({0}:VM Live Migration)\\Transfer Pass: Number'
 	)
- 
+
 	$LiveMigrationCompressionChecks = @(
 		'\\Hyper-V VM Live Migration({0}:VM Live Migration)\\Receiver: Bytes Pending Decompression',
 		'\\Hyper-V VM Live Migration({0}:VM Live Migration)\\Receiver: Compressed Bytes Received/sec',
@@ -550,14 +549,14 @@ begin
 		'\\Hyper-V VM Live Migration({0}:VM Live Migration)\\Compressor: Compressed Bytes Sent',
 		'\\Hyper-V VM Live Migration({0}:VM Live Migration)\\Compressor: Bytes to be Compressed'
 	)
- 
+
 	$LiveMigrationSMBChecks = @( # same for 2012R2 and 2016
 		'\\Hyper-V VM Live Migration({0}:VM Live Migration)\\SMB Transport: Bytes Sent/sec',
 		'\\Hyper-V VM Live Migration({0}:VM Live Migration)\\SMB Transport: Bytes Sent',
 		'\\Hyper-V VM Live Migration({0}:VM Live Migration)\\SMB Transport: Pending Send Bytes',
 		'\\Hyper-V VM Live Migration({0}:VM Live Migration)\\SMB Transport: Pending Send Count'
 	)
- 
+
 	$NetworkCoreChecks = @(
 		'\\Hyper-V Virtual Network Adapter({0}_Network Adapter_{1}--{2})\\Bytes Sent/sec',
 		'\\Hyper-V Virtual Network Adapter({0}_Network Adapter_{1}--{2})\\Bytes Received/sec'
@@ -580,7 +579,7 @@ begin
 		'\\Hyper-V Virtual Network Adapter({0}_Network Adapter_{1}--{2})\\Packets/sec',
 		'\\Hyper-V Virtual Network Adapter({0}_Network Adapter_{1}--{2})\\Bytes/sec'
 	)
- 
+
 	$NetworkDropReasonChecks = @(
 		'\\Hyper-V Virtual Network Adapter Drop Reasons({0}_Network Adapter_{1}--{2})\\Outgoing LowPowerPacketFilter',
 		'\\Hyper-V Virtual Network Adapter Drop Reasons({0}_Network Adapter_{1}--{2})\\Incoming LowPowerPacketFilter',
@@ -661,7 +660,7 @@ begin
 		'\\Hyper-V Virtual Network Adapter Drop Reasons({0}_Network Adapter_{1}--{2})\\Outgoing Unknown',
 		'\\Hyper-V Virtual Network Adapter Drop Reasons({0}_Network Adapter_{1}--{2})\\Incoming Unknown'
 	)
- 
+
 	$SaveSnapChecks = @( # same for 2012R2 and 2016
 		'\\Hyper-V VM Save, Snapshot, and Restore({0}:Current or most recent Save-Restore-Snapshot operation)\\Operation Time',
 		'\\Hyper-V VM Save, Snapshot, and Restore({0}:Current or most recent Save-Restore-Snapshot operation)\\Requests High Priority',
@@ -670,37 +669,37 @@ begin
 		'\\Hyper-V VM Save, Snapshot, and Restore({0}:Current or most recent Save-Restore-Snapshot operation)\\Requests Active',
 		'\\Hyper-V VM Save, Snapshot, and Restore({0}:Current or most recent Save-Restore-Snapshot operation)\\Threads Spawned'
 	)
- 
+
 	$SmartPagingChecks = @( # same for 2012R2 and 2016
 		'\\Hyper-V Dynamic Memory VM({0})\\Smart Paging Working Set Size'
 	)
- 
+
 	$VidChecks = @( # same for 2012R2 and 2016
 		'\\Hyper-V VM Vid Partition({0})\\Remote Physical Pages',
 		'\\Hyper-V VM Vid Partition({0})\\Preferred NUMA Node Index',
 		'\\Hyper-V VM Vid Partition({0})\\Physical Pages Allocated'
 	)
- 
-	#$VirtualDevicePipeChecks = @( # 2016 only -- uncertain where the GUIDs in {2}
-		# '\\Hyper-V VM Virtual Device Pipe IO({0}:{1}-{{{2}}})\\Receive Message Quota Exceeded',
-		# '\\Hyper-V VM Virtual Device Pipe IO({0}:{1}-{{{2}}})\\Receive QoS - Total Message Delay Time (100ns)',
-		# '\\Hyper-V VM Virtual Device Pipe IO({0}:{1}-{{{2}}})\\Receive QoS - Exempt Messages/sec',
-		# '\\Hyper-V VM Virtual Device Pipe IO({0}:{1}-{{{2}}})\\Receive QoS - Non-Conformant Messages/sec',
-		# '\\Hyper-V VM Virtual Device Pipe IO({0}:{1}-{{{2}}})\\Receive QoS - Conformant Messages/sec'
+
+	#$VirtualDevicePipeChecks = @( # 2016 only -- uncertain where to find the GUIDs in {2}
+	# '\\Hyper-V VM Virtual Device Pipe IO({0}:{1}-{{{2}}})\\Receive Message Quota Exceeded',
+	# '\\Hyper-V VM Virtual Device Pipe IO({0}:{1}-{{{2}}})\\Receive QoS - Total Message Delay Time (100ns)',
+	# '\\Hyper-V VM Virtual Device Pipe IO({0}:{1}-{{{2}}})\\Receive QoS - Exempt Messages/sec',
+	# '\\Hyper-V VM Virtual Device Pipe IO({0}:{1}-{{{2}}})\\Receive QoS - Non-Conformant Messages/sec',
+	# '\\Hyper-V VM Virtual Device Pipe IO({0}:{1}-{{{2}}})\\Receive QoS - Conformant Messages/sec'
 	#)
- 
-	#$VMBusProviderChecks = @( # 2016 only -- uncertain where the GUIDs in {2}
-		# '\\Hyper-V Virtual Machine Bus Provider Pipes({0}:{1}-{{{2}}})\\Bytes Written/sec',
-		# '\\Hyper-V Virtual Machine Bus Provider Pipes({0}:{1}-{{{2}}})\\Bytes Read/sec',
-		# '\\Hyper-V Virtual Machine Bus Provider Pipes({0}:{1}-{{{2}}})\\Writes/sec',
-		# '\\Hyper-V Virtual Machine Bus Provider Pipes({0}:{1}-{{{2}}})\\Reads/sec'
+
+	#$VMBusProviderChecks = @( # 2016 only -- uncertain where to find the GUIDs in {2}
+	# '\\Hyper-V Virtual Machine Bus Provider Pipes({0}:{1}-{{{2}}})\\Bytes Written/sec',
+	# '\\Hyper-V Virtual Machine Bus Provider Pipes({0}:{1}-{{{2}}})\\Bytes Read/sec',
+	# '\\Hyper-V Virtual Machine Bus Provider Pipes({0}:{1}-{{{2}}})\\Writes/sec',
+	# '\\Hyper-V Virtual Machine Bus Provider Pipes({0}:{1}-{{{2}}})\\Reads/sec'
 	#)
- 
+
 	$VMWorkerProcessChecks = @( # 2016 only
 		'\\Hyper-V Worker Virtual Processor({0}:WP VP {1})\\Intercepts Delayed',
 		'\\Hyper-V Worker Virtual Processor({0}:WP VP {1})\\Intercept Delay Time (ms)'
 	)
- 
+
 	$VRSSChecks = @( # 2016 only
 		'\\Hyper-V Virtual Network Adapter VRSS({0}_Network Adapter_Entry _{1}_{2}--{3})\\SendPacketCompletionsPerSecond',
 		'\\Hyper-V Virtual Network Adapter VRSS({0}_Network Adapter_Entry _{1}_{2}--{3})\\SendPacketPerSecond',
@@ -708,13 +707,13 @@ begin
 		'\\Hyper-V Virtual Network Adapter VRSS({0}_Network Adapter_Entry _{1}_{2}--{3})\\SendProcessor',
 		'\\Hyper-V Virtual Network Adapter VRSS({0}_Network Adapter_Entry _{1}_{2}--{3})\\ReceiveProcessor'
 	)
- 
+
 	$RemotingChecks = @( # 2016 only
 		'\\Hyper-V VM Remoting({0}:Remoting)\\Updated Pixels/sec',
 		'\\Hyper-V VM Remoting({0}:Remoting)\\Connected Clients'
 	)
 }
- 
+
 process
 {
 	Write-Progress -Activity 'Processing Input' -Status 'Processing Input'
@@ -726,7 +725,7 @@ process
 		{
 			$RawVMList.AddRange((Get-CimInstance -ComputerName $VM.ComputerName -Namespace 'root/virtualization/v2' -ClassName 'Msvm_ComputerSystem' -Filter ('Name="{0}"' -f $VM.Id)))
 		}
- 
+
 		elseif ($InputType -eq 'System.String')
 		{
 			foreach ($VMItem in $VM)
@@ -754,52 +753,52 @@ process
 	{
 		$RawVMList.AddRange((Get-CimInstance -ComputerName $ComputerName -Namespace 'root/virtualization/v2' -ClassName 'Msvm_ComputerSystem'))
 	}
- 
+
 	switch ($LineEndFormat[0].ToString().ToLower())
 	{
 		'l' { $LineEnding = "`n" }
 		'm' { $LineEnding = "`r" }
 		default { $LineEnding = "`r`n" }
 	}
- 
+
 	Write-Progress -Activity 'Processing Input' -Status 'Loading Virtual Machines' -Completed
- 
+
 	if (-not $RawVMList.Count)
 	{
 		Write-Debug -Message 'No VMs specified in this pass'
 		return
 	}
- 
+
 	$SanitizedVMList = @($RawVMList | Where-Object -Property 'Name' -Match $GUIDPattern)
- 
+
 	if ($SanitizedVMList)
 	{
 		$VMList.AddRange($SanitizedVMList)
-	} 
+	}
 	else
 	{
 		Write-Debug -Message 'A Hyper-V host was specified, but no VMs were found. Verify your permissions.'
 		return
 	}
 }
- 
+
 end
 {
 	if (-not $VMList.Count)
 	{
-		Write-Warning -Message 'No VMs found' 
+		Write-Warning -Message 'No VMs found'
 		return
-	} 
+	}
 	$PercentTracker = 0
 	$ProcessPercentagePerVM = 100 * (1 / $VMList.Count)
- 
+
 	Write-Progress -Activity 'Retrieving Virtual Machine Information' -Status 'Loading List' -PercentComplete $PercentTracker
 	foreach ($TargetVM in $VMList)
 	{
 		$PercentTracker += $ProcessPercentagePerVM
 		Write-Progress -Activity 'Retrieving Virtual Machine Information' -Status $TargetVM.ElementName -PercentComplete $PercentTracker
 		$HostName = $TargetVM.ComputerName
- 
+
 		try
 		{
 			$VMSD = Get-CimAssociatedInstance -InputObject $TargetVM -ResultClassName 'Msvm_VirtualSystemSettingData'
@@ -807,10 +806,10 @@ end
 			$VMDisks = Get-CimAssociatedInstance -InputObject $VMSD -ResultClassName 'Msvm_StorageAllocationSettingData' | where ResourceSubType -eq 'Microsoft:Hyper-V:Virtual Hard Disk'
 			$VMMemory = (Get-CimAssociatedInstance -InputObject $VMSD -ResultClassName 'Msvm_MemorySettingData')[0]
 			$VMIsClustered = [bool](
-			[bool]((Get-CimAssociatedInstance -InputObject $VMSD -ResultClassName 'Msvm_KvpExchangeComponentSettingData').HostOnlyItems) -and
+				[bool]((Get-CimAssociatedInstance -InputObject $VMSD -ResultClassName 'Msvm_KvpExchangeComponentSettingData').HostOnlyItems) -and
 				(Get-CimAssociatedInstance -InputObject $VMSD -ResultClassName 'Msvm_KvpExchangeComponentSettingData').HostOnlyItems[0].Contains('VirtualMachineIsClustered')
 			)
- 
+
 			$HostName = (Get-CimAssociatedInstance -InputObject $TargetVM -ResultClassName 'Msvm_VirtualSystemManagementService').SystemName
 			if ([String]::IsNullOrEmpty($Version))
 			{
@@ -830,7 +829,7 @@ end
 			Write-Error $_
 			continue
 		}
- 
+
 		if ($ResolveHost)
 		{
 			try
@@ -846,16 +845,16 @@ end
 		{
 			$HostName = $HostName.ToUpper()
 		}
- 
+
 		$ServiceObjectParameters =
 		@{
 			'HostName'  = $HostName;
 			'VMName'    = $TargetVM.ElementName;
 			'Clustered' = $VMIsClustered;
 		}
- 
+
 		$VMNetAdapters = Get-CimAssociatedInstance -InputObject $TargetVM -ResultClassName 'Msvm_SyntheticEthernetPort'
- 
+
 		if ($IncludeAdvancedCounters)
 		{
 			$ChecksList = $AdvancedChecks
@@ -865,7 +864,7 @@ end
 				$OutNull = $CounterList.Add((New-ServiceObject @ServiceObjectParameters -CounterCategory 'VM' -Counter ($AdvancedCounter -f $TargetVM.ElementName)))
 			}
 		}
- 
+
 		if (-not $SkipCPU)
 		{
 			$ChecksList = $CPUCoreChecks
@@ -882,8 +881,8 @@ end
 					$OutNull = $CounterList.Add((New-ServiceObject @ServiceObjectParameters -CounterCategory ([String]::Join(' ', 'vCPU', $i)) -Counter ($CPUCounter -f $TargetVM.ElementName, $i)))
 				}
 			}
-		} 
- 
+		}
+
 		if (-not $SkipDisk)
 		{
 			foreach ($VMDisk in $VMDisks)
@@ -896,13 +895,13 @@ end
 				$DiskCounterPath = $DiskName -replace '^\\\\', '--?-UNC-'
 				$DiskCounterPath = $DiskCounterPath -replace '\\', '-'
 				$CounterCategory = [String]::Join(' ', 'vDisk', $DiskName.Substring($DiskName.LastIndexOf('\') + 1))
-				foreach ($DiskCounter in $DiskCoreChecks) 
+				foreach ($DiskCounter in $DiskCoreChecks)
 				{
 					$OutNull = $CounterList.Add((New-ServiceObject @ServiceObjectParameters -CounterCategory $CounterCategory -Counter ($DiskCounter -f $DiskCounterPath)))
 				}
 			}
 		}
- 
+
 		if (-not $SkipDynamicMemory)
 		{
 			$ChecksList = @()
@@ -910,19 +909,11 @@ end
 			if ($VMMemory.DynamicMemoryEnabled) { $ChecksList += $DynamicMemoryDMOnlyChecks }
 			if ($Version -eq '2016' -and $VMMemory.DynamicMemoryEnabled) { $ChecksList += $DynamicMemoryChecks2016 }
 			foreach ($DynamicMemoryCounter in $ChecksList)
-			{ 
-				$OutNull = $CounterList.Add((New-ServiceObject @ServiceObjectParameters -CounterCategory 'vMemory' -Counter ($DynamicMemoryCounter -f $TargetVM.ElementName)))
-			} 
-		}
- 
-		if ($VMSD.VirtualSystemSubType -eq 'Microsoft:Hyper-V:SubType:1' -and -not $SkipIDE)
-		{
-			foreach ($IDECount in $IDEChecks)
 			{
-				$OutNull = $CounterList.Add((New-ServiceObject @ServiceObjectParameters -CounterCategory 'vIDE' -Counter ($IDECount -f $TargetVM.ElementName)))
-			} 
+				$OutNull = $CounterList.Add((New-ServiceObject @ServiceObjectParameters -CounterCategory 'vMemory' -Counter ($DynamicMemoryCounter -f $TargetVM.ElementName)))
+			}
 		}
- 
+
 		if ($VMIsClustered -and $IncludeLiveMigration)
 		{
 			$ChecksList = $LiveMigrationChecks
@@ -931,9 +922,17 @@ end
 			foreach ($LiveMigrationCounter in $LiveMigrationChecks)
 			{
 				$OutNull = $CounterList.Add((New-ServiceObject @ServiceObjectParameters -CounterCategory 'Live Migration' -Counter ($LiveMigrationCounter -f $TargetVM.ElementName)))
-			} 
+			}
 		}
- 
+
+		if ($VMSD.VirtualSystemSubType -eq 'Microsoft:Hyper-V:SubType:1' -and $IncludeIDE)
+		{
+			foreach ($IDECount in $IDEChecks)
+			{
+				$OutNull = $CounterList.Add((New-ServiceObject @ServiceObjectParameters -CounterCategory 'vIDE' -Counter ($IDECount -f $TargetVM.ElementName)))
+			}
+		}
+
 		if ($VMNetAdapters -and -not $SkipNetwork)
 		{
 			foreach ($VMNetAdapter in $VMNetAdapters)
@@ -944,7 +943,7 @@ end
 					$DeviceID = $Matches[0].ToLower()
 					$FoundAdapterIDs = $true
 				}
- 
+
 				if ($FoundAdapterIDs -and $VMNetAdapter.SystemName -match $GUIDPattern)
 				{
 					$SystemName = $Matches[0].ToLower()
@@ -959,10 +958,10 @@ end
 					{
 						$OutNull = $CounterList.Add((New-ServiceObject @ServiceObjectParameters -CounterCategory 'vNIC' -Counter ($NetworkCounter -f $TargetVM.ElementName, $SystemName, $DeviceID)))
 					}
- 
+
 					if ($Version -eq '2016' -and $IncludeVRSS)
 					{
-						foreach ($VP in @(0..15)) 
+						foreach ($VP in @(0..15))
 						{
 							foreach ($VRSSCheck in $VRSSChecks)
 							{
@@ -973,7 +972,7 @@ end
 				}
 			}
 		}
- 
+
 		if ($IncludeSavesSnaps)
 		{
 			foreach ($SaveSnapCounter in $SaveSnapChecks)
@@ -981,7 +980,7 @@ end
 				$OutNull = $CounterList.Add((New-ServiceObject @ServiceObjectParameters -CounterCategory 'Save and Snapshot' -Counter ($SaveSnapCounter -f $TargetVM.ElementName)))
 			}
 		}
- 
+
 		if ($IncludeSmartPaging)
 		{
 			foreach ($SmartPagingCounter in $SmartPagingChecks)
@@ -989,7 +988,7 @@ end
 				$OutNull = $CounterList.Add((New-ServiceObject @ServiceObjectParameters -CounterCategory 'Smart Paging' -Counter ($SmartPagingCounter -f $TargetVM.ElementName)))
 			}
 		}
- 
+
 		if ($IncludeNUMA)
 		{
 			foreach ($VidCounter in $VidChecks)
@@ -997,7 +996,7 @@ end
 				$OutNull = $CounterList.Add((New-ServiceObject @ServiceObjectParameters -CounterCategory 'VID' -Counter ($VidCounter -f $TargetVM.ElementName)))
 			}
 		}
- 
+
 		if ($Version -eq '2016' -and $IncludeRemotingChecks)
 		{
 			foreach ($RemotingCheck in $RemotingChecks)
@@ -1007,25 +1006,25 @@ end
 		}
 	}
 	Write-Progress -Activity 'Retrieving Virtual Machine Information' -Completed
- 
+
 	Write-Progress -Activity 'Writing Service Definitions' -Status 'Initializing'
 	try
 	{
 		$OutStream = [System.IO.StreamWriter]::New($Path)
 		if ($VMAsHost -and $CreateVMHostDefinition)
 		{
-			foreach ($TargetVM in $VMList) 
+			foreach ($TargetVM in $VMList)
 			{
-				$OutStream.Write((New-HostDefinition -ComputerName $TargetVM.ElementName -HostTemplate $VMHostTemplate -UseSkeletonHost $UseSkeletonHost.ToBool() -HostGroups $VMHostGroups -LineEnding $LineEnding -HostContacts $VMHostContacts -HostContactGroups $VMHostContactGroups))
-			} 
-		} 
+				$OutStream.Write((New-HostDefinition -ComputerName $TargetVM.ElementName -HostTemplate $VMHostTemplate -UseSkeletonHost $UseSkeletonHost.ToBool() -VMHostGroups $VMHostGroups -LineEnding $LineEnding -VMHostContacts $VMHostContacts -VMHostContactGroups $VMHostContactGroups))
+			}
+		}
 		foreach ($CounterItem in $CounterList)
 		{
 			$ServiceText = New-ServiceDefinition -ServiceObject $CounterItem -LineEnding $LineEnding -ServiceTemplate $ServiceTemplate -ServiceGroups $ServiceGroups -ServiceContacts $ServiceContacts -ServiceContactGroups $ServiceContactGroups -VMAsHost $VMAsHost.ToBool()
 			foreach ($ServiceTextLine in $ServiceText)
 			{
-				$OutStream.Write($ServiceTextLine) 
-			} 
+				$OutStream.Write($ServiceTextLine)
+			}
 		}
 	}
 	catch
