@@ -160,6 +160,8 @@ begin
 		$OutNull = New-Item -Path $Path -ItemType File
 	}
 
+	$Path = (Resolve-Path -Path $Path).Path
+
 	if (-not $Append)
 	{
 		Clear-Content -Path $Path
@@ -723,7 +725,10 @@ process
 		$InputType = $VM[0].GetType().FullName
 		if ($InputType -eq 'Microsoft.HyperV.PowerShell.VirtualMachine')
 		{
-			$RawVMList.AddRange((Get-CimInstance -ComputerName $VM.ComputerName -Namespace 'root/virtualization/v2' -ClassName 'Msvm_ComputerSystem' -Filter ('Name="{0}"' -f $VM.Id)))
+			foreach ($PSVM in $VM)
+			{
+				$OutNull = $RawVMList.Add((Get-CimInstance -ComputerName $PSVM.ComputerName -Namespace 'root/virtualization/v2' -ClassName 'Msvm_ComputerSystem' -Filter ('Name="{0}"' -f $PSVM.Id)))
+			}
 		}
 
 		elseif ($InputType -eq 'System.String')
@@ -792,11 +797,11 @@ end
 	$PercentTracker = 0
 	$ProcessPercentagePerVM = 100 * (1 / $VMList.Count)
 
-	Write-Progress -Activity 'Retrieving Virtual Machine Information' -Status 'Loading List' -PercentComplete $PercentTracker
+	Write-Progress -Activity 'Retrieving Virtual Machine Information' -Status 'Loading VM List' -PercentComplete $PercentTracker
 	foreach ($TargetVM in $VMList)
 	{
 		$PercentTracker += $ProcessPercentagePerVM
-		Write-Progress -Activity 'Retrieving Virtual Machine Information' -Status $TargetVM.ElementName -PercentComplete $PercentTracker
+		Write-Progress -Activity 'Retrieving Virtual Machine Information' -Status ('Inspecting {0}' -f $TargetVM.ElementName) -PercentComplete $PercentTracker
 		$HostName = $TargetVM.ComputerName
 
 		try
@@ -1010,6 +1015,7 @@ end
 	Write-Progress -Activity 'Writing Service Definitions' -Status 'Initializing'
 	try
 	{
+		Write-Host 'Starting write'
 		$OutStream = [System.IO.StreamWriter]::New($Path)
 		if ($VMAsHost -and $CreateVMHostDefinition)
 		{
@@ -1033,6 +1039,7 @@ end
 	}
 	finally
 	{
+		$OutStream.Flush()
 		$OutStream.Close()
 	}
 	Write-Progress -Activity 'Writing Service Definitions' -Completed
