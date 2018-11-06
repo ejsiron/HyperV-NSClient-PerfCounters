@@ -1015,7 +1015,6 @@ end
 	Write-Progress -Activity 'Writing Service Definitions' -Status 'Initializing'
 	try
 	{
-		Write-Host 'Starting write'
 		$OutStream = [System.IO.StreamWriter]::New($Path)
 		if ($VMAsHost -and $CreateVMHostDefinition)
 		{
