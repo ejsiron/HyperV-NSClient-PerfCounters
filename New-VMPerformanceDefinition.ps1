@@ -97,7 +97,9 @@
 	None
 .NOTES
 	New-VMPerformanceDefinition.ps1
-	Version 1.1, November 5, 2018
+	Version 1.2, December 20, 2019
+	-- No longer fails on VMs with a snapshot
+	-- Failure to operate on a single VM no longer halts the entire script
 	Author: Eric Siron
 .EXAMPLE
 	New-VMPerformanceDefinition.ps1 -ComputerName -Path C:\Source\svhv01.cfg -ServiceTemplate 'hyperv-vm-performance'
@@ -806,7 +808,7 @@ end
 
 		try
 		{
-			$VMSD = Get-CimAssociatedInstance -InputObject $TargetVM -ResultClassName 'Msvm_VirtualSystemSettingData'
+			$VMSD = Get-CimAssociatedInstance -InputObject $TargetVM -ResultClassName 'Msvm_VirtualSystemSettingData' | Where-Object -Property 'VirtualSystemType' -EQ 'Microsoft:Hyper-V:System:Realized'
 			$VMCPUData = Get-CimAssociatedInstance -InputObject $VMSD -ResultClassName 'Msvm_ProcessorSettingData'
 			$VMDisks = Get-CimAssociatedInstance -InputObject $VMSD -ResultClassName 'Msvm_StorageAllocationSettingData' | where ResourceSubType -eq 'Microsoft:Hyper-V:Virtual Hard Disk'
 			$VMMemory = (Get-CimAssociatedInstance -InputObject $VMSD -ResultClassName 'Msvm_MemorySettingData')[0]
@@ -831,7 +833,7 @@ end
 		catch
 		{
 			Write-Warning -Message ('An error occurred while retrieving data for {0}' -f $TargetVM.ElementName)
-			Write-Error $_
+			Write-Error $_ -ErrorAction Continue
 			continue
 		}
 
