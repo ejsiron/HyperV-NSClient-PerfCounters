@@ -18,11 +18,8 @@
 	If a cluster name or IP is specified, only the current owner of the core cluster resource will be scanned.
 	If not specified, the local system is used.
 .PARAMETER Path
-	The path to an output file. It will be created if it does not exist. By default, it will be overwritten. Use Append to override.
-.PARAMETER Version
-	Choices: 2012R2 or 2016. Default: 2012R2
-	If specified, assumes that the virtual machine(s) are all of the indicated version.
-	If not specified, the host will be queried.
+	The path to a base output filename. It will be used as a template. Generated files will have an underscore and a number.
+	Ex: "C:\temp\vdidef" becomes "C:\temp\vdidef_perf1.cfg", "C:\temp\vdidef_perf2.cfg", etc.
 .PARAMETER LineEndFormat
 	Specifies the system codes to use to indicate an end-of-line in the output file. Default is "Linux".
 	* Linux: Uses only a newline character (\n)
@@ -36,8 +33,6 @@
 	Text to use as a service's "contacts" line. If left empty, the "contacts" line is not generated.
 .PARAMETER ServiceContactGroups
 	Text to use as a service's "contact_groups" line. If left empty, the "contact_groups" line is not generated.
-.PARAMETER Append
-	Appends the generated output to Path instead of overwriting.
 .PARAMETER ResolveHost
 	Determines the IP address of the Hyper-V host or cluster and uses that as the service target instead of the host name.
 .PARAMETER VMAsHost
@@ -88,6 +83,8 @@
 	Text to use as a host's "contacts" line. If left empty, the "contacts" line is not generated. Ignored if CreateVMHostDefinition and VMAsHost are not also set.
 .PARAMETER VMHostContactGroups
 	Text to use as a host's "contact_groups" line. If left empty, the "contact_groups" line is not generated. Ignored if CreateVMHostDefinition and VMAsHost are not also set.
+.PARAMETER VMsPerFile
+	Maximum number of VMs to place in each service definition file. All counters for a virtual machine will appear in the same file.
 .INPUTS
 	System.String[]
 	Microsoft.HyperV.PowerShell.VirtualMachine[]
@@ -97,9 +94,6 @@
 	None
 .NOTES
 	New-VMPerformanceDefinition.ps1
-	Version 1.2, December 20, 2019
-	-- No longer fails on VMs with a snapshot
-	-- Failure to operate on a single VM no longer halts the entire script
 	Author: Eric Siron
 .EXAMPLE
 	New-VMPerformanceDefinition.ps1 -ComputerName -Path C:\Source\svhv01.cfg -ServiceTemplate 'hyperv-vm-performance'
@@ -123,7 +117,6 @@ param(
 	[Parameter()][String]$ServiceGroups = [System.String]::Empty,
 	[Parameter()][String]$ServiceContacts = [System.String]::Empty,
 	[Parameter()][String]$ServiceContactGroups = [System.String]::Empty,
-	[Parameter()][Switch]$Append,
 	[Parameter()][Switch]$ResolveHost,
 	[Parameter()][Switch]$VMAsHost,
 	[Parameter()][Switch]$UpperCaseHostName,
@@ -146,7 +139,8 @@ param(
 	[Parameter()][Switch]$UseSkeletonHost,
 	[Parameter()][String]$VMHostGroups = [System.String]::Empty,
 	[Parameter()][String]$VMHostContacts = [System.String]::Empty,
-	[Parameter()][String]$VMHostContactGroups = [System.String]::Empty
+	[Parameter()][String]$VMHostContactGroups = [System.String]::Empty,
+	[Parameter()][Int32]$VMsPerFile = 50
 )
 
 begin
@@ -159,14 +153,21 @@ begin
 
 	if (-not (Test-Path -Path $Path))
 	{
-		$OutNull = New-Item -Path $Path -ItemType File
+		try
+		{
+			$TempFile = New-Item -Path $Path -ItemType File -ErrorAction Stop
+		}
+		catch
+		{
+			Write-Error -Message ('Unable to create file {0}: {1}' -f $Path, $_.Exception.Message)
+			exit 1
+		}
+		Remove-Item -Path $TempFile
 	}
 
-	$Path = (Resolve-Path -Path $Path).Path
-
-	if (-not $Append)
+	if ($VMsPerFile -le 0)
 	{
-		Clear-Content -Path $Path
+		$VMsPerFile = 50
 	}
 
 	function New-ServiceObject
@@ -684,7 +685,7 @@ begin
 		'\\Hyper-V VM Vid Partition({0})\\Physical Pages Allocated'
 	)
 
-	#$VirtualDevicePipeChecks = @( # 2016 only -- uncertain where to find the GUIDs in {2}
+	#$VirtualDevicePipeChecks = @( # 2016 only -- uncertain where the GUIDs in {2}
 	# '\\Hyper-V VM Virtual Device Pipe IO({0}:{1}-{{{2}}})\\Receive Message Quota Exceeded',
 	# '\\Hyper-V VM Virtual Device Pipe IO({0}:{1}-{{{2}}})\\Receive QoS - Total Message Delay Time (100ns)',
 	# '\\Hyper-V VM Virtual Device Pipe IO({0}:{1}-{{{2}}})\\Receive QoS - Exempt Messages/sec',
@@ -692,7 +693,7 @@ begin
 	# '\\Hyper-V VM Virtual Device Pipe IO({0}:{1}-{{{2}}})\\Receive QoS - Conformant Messages/sec'
 	#)
 
-	#$VMBusProviderChecks = @( # 2016 only -- uncertain where to find the GUIDs in {2}
+	#$VMBusProviderChecks = @( # 2016 only -- uncertain where the GUIDs in {2}
 	# '\\Hyper-V Virtual Machine Bus Provider Pipes({0}:{1}-{{{2}}})\\Bytes Written/sec',
 	# '\\Hyper-V Virtual Machine Bus Provider Pipes({0}:{1}-{{{2}}})\\Bytes Read/sec',
 	# '\\Hyper-V Virtual Machine Bus Provider Pipes({0}:{1}-{{{2}}})\\Writes/sec',
@@ -727,17 +728,17 @@ process
 		$InputType = $VM[0].GetType().FullName
 		if ($InputType -eq 'Microsoft.HyperV.PowerShell.VirtualMachine')
 		{
-			foreach ($PSVM in $VM)
+			foreach ($VMObject in $VM)
 			{
-				$OutNull = $RawVMList.Add((Get-CimInstance -ComputerName $PSVM.ComputerName -Namespace 'root/virtualization/v2' -ClassName 'Msvm_ComputerSystem' -Filter ('Name="{0}"' -f $PSVM.Id)))
+				$OutNull = $RawVMList.Add((Get-CimInstance -ComputerName $VMObject.ComputerName -Namespace 'root/virtualization/v2' -ClassName 'Msvm_ComputerSystem' -Filter ('Name="{0}"' -f $VMObject.Id)))
 			}
 		}
 
 		elseif ($InputType -eq 'System.String')
 		{
-			foreach ($VMItem in $VM)
+			foreach ($VMObject in $VM)
 			{
-				$OutNull = $RawVMList.Add((Get-CimInstance -ComputerName $ComputerName -Namespace 'root/virtualization/v2' -ClassName 'Msvm_ComputerSystem' -Filter ('ElementName="{0}"' -f $VMItem)))
+				$OutNull = $RawVMList.Add((Get-CimInstance -ComputerName $ComputerName -Namespace 'root/virtualization/v2' -ClassName 'Msvm_ComputerSystem' -Filter ('ElementName="{0}"' -f $VMObject)))
 			}
 		}
 		elseif ($InputType -eq 'Microsoft.Management.Infrastructure.CimInstance' -and $VM[0].CreationClassName -eq 'Msvm_ComputerSystem')
@@ -746,9 +747,9 @@ process
 		}
 		elseif ($InputType -eq 'System.Management.ManagementObject')
 		{
-			foreach ($VMItem in $VM)
+			foreach ($VMObject in $VM)
 			{
-				$OutNull = $RawVMList.Add((Get-CimInstance -ComputerName $VMItem.__SERVER -Namespace 'root/virtualization/v2' -ClassName 'Msvm_ComputerSystem' -Filter ('Name="{0}"' -f $VMItem.Name)))
+				$OutNull = $RawVMList.Add((Get-CimInstance -ComputerName $VMObject.__SERVER -Namespace 'root/virtualization/v2' -ClassName 'Msvm_ComputerSystem' -Filter ('Name="{0}"' -f $VMObject.Name)))
 			}
 		}
 		else
@@ -787,6 +788,7 @@ process
 		Write-Debug -Message 'A Hyper-V host was specified, but no VMs were found. Verify your permissions.'
 		return
 	}
+	$VMList = Sort-Object -InputObject $VMList -Property 'ElementName'
 }
 
 end
@@ -799,18 +801,18 @@ end
 	$PercentTracker = 0
 	$ProcessPercentagePerVM = 100 * (1 / $VMList.Count)
 
-	Write-Progress -Activity 'Retrieving Virtual Machine Information' -Status 'Loading VM List' -PercentComplete $PercentTracker
+	Write-Progress -Activity 'Retrieving Virtual Machine Information' -Status 'Loading List' -PercentComplete $PercentTracker
 	foreach ($TargetVM in $VMList)
 	{
 		$PercentTracker += $ProcessPercentagePerVM
-		Write-Progress -Activity 'Retrieving Virtual Machine Information' -Status ('Inspecting {0}' -f $TargetVM.ElementName) -PercentComplete $PercentTracker
+		Write-Progress -Activity 'Retrieving Virtual Machine Information' -Status $TargetVM.ElementName -PercentComplete $PercentTracker
 		$HostName = $TargetVM.ComputerName
 
 		try
 		{
-			$VMSD = Get-CimAssociatedInstance -InputObject $TargetVM -ResultClassName 'Msvm_VirtualSystemSettingData' | Where-Object -Property 'VirtualSystemType' -EQ 'Microsoft:Hyper-V:System:Realized'
+			$VMSD = Get-CimAssociatedInstance -InputObject $TargetVM -ResultClassName 'Msvm_VirtualSystemSettingData' | Where-Object -Property 'VirtualSystemType' -EQ -Value 'Microsoft:Hyper-V:System:Realized'
 			$VMCPUData = Get-CimAssociatedInstance -InputObject $VMSD -ResultClassName 'Msvm_ProcessorSettingData'
-			$VMDisks = Get-CimAssociatedInstance -InputObject $VMSD -ResultClassName 'Msvm_StorageAllocationSettingData' | where ResourceSubType -eq 'Microsoft:Hyper-V:Virtual Hard Disk'
+			$VMDisks = Get-CimAssociatedInstance -InputObject $VMSD -ResultClassName 'Msvm_StorageAllocationSettingData' | where ResourceSubType -EQ 'Microsoft:Hyper-V:Virtual Hard Disk'
 			$VMMemory = (Get-CimAssociatedInstance -InputObject $VMSD -ResultClassName 'Msvm_MemorySettingData')[0]
 			$VMIsClustered = [bool](
 				[bool]((Get-CimAssociatedInstance -InputObject $VMSD -ResultClassName 'Msvm_KvpExchangeComponentSettingData').HostOnlyItems) -and
@@ -818,12 +820,9 @@ end
 			)
 
 			$HostName = (Get-CimAssociatedInstance -InputObject $TargetVM -ResultClassName 'Msvm_VirtualSystemManagementService').SystemName
-			if ([String]::IsNullOrEmpty($Version))
-			{
-				$Version = '2012R2'
-				$DetectedVersion = (Get-CimInstance -ComputerName $HostName -ClassName 'Win32_OperatingSystem').Version
-				if ($DetectedVersion -match '^10\.') { $Version = '2016' }
-			}
+			$Version = '2012R2'
+			$DetectedVersion = (Get-CimInstance -ComputerName $HostName -ClassName 'Win32_OperatingSystem').Version
+			if ($DetectedVersion -match '^10\.') { $Version = '2016' }
 			$VMMigrationSettings = Get-CimInstance -ComputerName $HostName -Namespace root/virtualization/v2 -ClassName Msvm_VirtualSystemMigrationServiceSettingData
 			if ($VMIsClustered)
 			{
@@ -833,7 +832,7 @@ end
 		catch
 		{
 			Write-Warning -Message ('An error occurred while retrieving data for {0}' -f $TargetVM.ElementName)
-			Write-Error $_ -ErrorAction Continue
+			Write-Error $_
 			continue
 		}
 
@@ -1015,18 +1014,58 @@ end
 	Write-Progress -Activity 'Retrieving Virtual Machine Information' -Completed
 
 	Write-Progress -Activity 'Writing Service Definitions' -Status 'Initializing'
+	$OutStream = $null
+	$FileList = New-Object System.Collections.ArrayList
 	try
 	{
-		$OutStream = [System.IO.StreamWriter]::New($Path)
+		$MaxFileCount = [Math]::Ceiling($VMList.Count / $VMsPerFile)
+		$PaddingDigits = $MaxFileCount.ToString().Length
+		$FileCounter = 0
+		$PlaceMarker = $VMsPerFile
+		$OutStream = $null
 		if ($VMAsHost -and $CreateVMHostDefinition)
 		{
+			$HostsPerFile = 25 * $VMsPerFile
 			foreach ($TargetVM in $VMList)
 			{
+				if ($PlaceMarker -eq $HostsPerFile)
+				{
+					$FileCounter++
+					$OutPath = "{0}_VMHosts_{1:D$($PaddingDigits)}.cfg" -f $Path, $FileCounter
+					if ($OutStream -ne $null)
+					{
+						$OutStream.Close()
+					}
+					$OutStream = [System.IO.StreamWriter]::New($OutPath)
+					$OutNull = $FileList.Add($OutPath)
+					$PlaceMarker = 1
+				}
 				$OutStream.Write((New-HostDefinition -ComputerName $TargetVM.ElementName -HostTemplate $VMHostTemplate -UseSkeletonHost $UseSkeletonHost.ToBool() -VMHostGroups $VMHostGroups -LineEnding $LineEnding -VMHostContacts $VMHostContacts -VMHostContactGroups $VMHostContactGroups))
+				$PlaceMarker++
 			}
+			$FileCounter = 0
+			$PlaceMarker = $VMsPerFile
 		}
+		$PreviousVMName = ''
 		foreach ($CounterItem in $CounterList)
 		{
+			if ($PlaceMarker -eq $VMsPerFile)
+			{
+				$FileCounter++
+				$OutPath = "{0}_VMPerfDefs_{1:D$($PaddingDigits)}.cfg" -f $Path, $FileCounter
+				if ($OutStream -ne $null)
+				{
+					$OutStream.Close()
+				}
+				$OutStream = [System.IO.StreamWriter]::New($OutPath)
+				$OutNull = $FileList.Add($OutPath)
+				$PlaceMarker = 1
+			}
+			if ($PreviousVMName -ne $CounterItem.VMName)
+			{
+				$PreviousVMName = $CounterItem.VMName
+				$PlaceMarker++
+			}
 			$ServiceText = New-ServiceDefinition -ServiceObject $CounterItem -LineEnding $LineEnding -ServiceTemplate $ServiceTemplate -ServiceGroups $ServiceGroups -ServiceContacts $ServiceContacts -ServiceContactGroups $ServiceContactGroups -VMAsHost $VMAsHost.ToBool()
 			foreach ($ServiceTextLine in $ServiceText)
 			{
@@ -1040,8 +1079,11 @@ end
 	}
 	finally
 	{
-		$OutStream.Flush()
-		$OutStream.Close()
+		if ($OutStream -ne $null)
+		{
+			$OutStream.Close()
+		}
 	}
 	Write-Progress -Activity 'Writing Service Definitions' -Completed
+	$FileList
 }
